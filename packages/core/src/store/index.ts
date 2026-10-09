@@ -17,6 +17,7 @@ export {
     tasksLoadingAtom,
     tasksErrorAtom,
     tasksAtom,
+    activeProjectTasksAtom,
     selectedTaskIdAtom,
     selectedTaskAtom,
     groupedAllTasksAtom
@@ -95,6 +96,7 @@ export {
 
 // Echo
 export { echoReportsAtom } from './echo';
+export { projectGoalsAtom, projectNowAtom } from './projects';
 
 // Data Import/Export
 export {

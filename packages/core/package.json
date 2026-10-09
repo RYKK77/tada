@@ -11,6 +11,7 @@
     "./services/storageInterface": "./src/services/storageInterface.ts",
     "./services/storageManager": "./src/services/storageManager.ts",
     "./types": "./src/types/index.ts",
+    "./projects": "./src/services/projects.ts",
     "./store/jotai": "./src/store/jotai.ts"
   },
   "scripts": {

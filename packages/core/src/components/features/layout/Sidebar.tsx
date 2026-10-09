@@ -204,9 +204,10 @@ const Sidebar: React.FC = () => {
         setIsAddListModalOpen(true);
     }, [setIsAddListModalOpen]);
 
-    const handleListAdded = useCallback(() => {
+    const handleListAdded = useCallback((id: string) => {
         setIsAddListModalOpen(false);
-    }, [setIsAddListModalOpen]);
+        navigate(`/projects/${encodeURIComponent(id)}`);
+    }, [setIsAddListModalOpen, navigate]);
 
     const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         setSearchTerm(e.target.value);
@@ -246,7 +247,7 @@ const Sidebar: React.FC = () => {
         try {
             updateList(editingListId, {name: trimmedName});
             if (currentFilter === `list-${encodeURIComponent(originalList.name)}`) {
-                navigate(`/list/${encodeURIComponent(trimmedName)}`);
+                navigate(`/projects/${encodeURIComponent(editingListId!)}`);
             }
         } catch (e: any) {
             alert(`Error renaming list: ${e.message}`);
@@ -282,7 +283,7 @@ const Sidebar: React.FC = () => {
         }
     }, [listToDelete, currentFilter, navigate, deleteList]);
 
-    const myListsToDisplay = useMemo(() => userLists?.filter(list => list.name !== 'Inbox') ?? [], [userLists]);
+    const myListsToDisplay = useMemo(() => userLists?.filter(list => list.name !== 'Inbox' && !list.archivedAt) ?? [], [userLists]);
     const inboxList = useMemo(() => userLists?.find(list => list.name === 'Inbox'), [userLists]);
     const tagsToDisplay = useMemo(() => userTags, [userTags]);
 
@@ -396,7 +397,8 @@ const Sidebar: React.FC = () => {
                                                                label={t('sidebar.inbox')}
                                                                count={counts.lists['Inbox']}/>}
                                 </nav>
-                                <CollapsibleSection title={t('sidebar.myLists')}
+                                <div className="pt-3"><SidebarItem to="/projects" filter="projects" icon="folder" label={t('projects.myProjects')} /></div>
+                                <CollapsibleSection title={t('projects.currentProjects')}
                                                     action={
                                                         <Button variant="ghost" size="icon" icon="plus"
                                                                 className="w-6 h-6 text-grey-medium dark:text-neutral-400 hover:text-primary dark:hover:text-primary-light hover:bg-black/5 dark:hover:bg-white/5"
@@ -431,8 +433,8 @@ const Sidebar: React.FC = () => {
                                                         />
                                                     </form>
                                                 ) : (
-                                                    <SidebarItem to={`/list/${encodeURIComponent(list.name)}`}
-                                                                 filter={`list-${list.name}`}
+                                                    <SidebarItem to={`/projects/${encodeURIComponent(list.id)}`}
+                                                                 filter={`project-${list.id}`}
                                                                  icon={(list.icon as IconName) || 'list'}
                                                                  label={list.name}
                                                                  count={counts.lists[list.name]} isUserList={true}/>

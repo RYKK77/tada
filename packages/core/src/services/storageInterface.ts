@@ -2,6 +2,7 @@ import {
     AISettings,
     AppearanceSettings,
     List,
+    ProjectGoal,
     PreferencesSettings,
     StoredSummary,
     Task,
@@ -44,6 +45,10 @@ export interface IStorageService {
     updateList(listId: string, updates: Partial<List>): List;
     deleteList(listId: string): { message: string };
     updateLists(lists: List[]): List[];
+
+    // Project goals are exported/imported with projects (includeLists).
+    fetchGoals(): ProjectGoal[];
+    updateGoals(goals: ProjectGoal[]): ProjectGoal[];
 
     // Tasks
     fetchTasks(): Task[];

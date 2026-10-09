@@ -5,6 +5,7 @@ import storageManager from '@/services/storageManager';
 import { addNotificationAtom } from './ui';
 import { tasksAtom } from './tasks';
 import { userListsAtom } from './lists';
+import { projectGoalsAtom } from './projects';
 import { storedSummariesAtom } from './summary';
 import { echoReportsAtom } from './echo';
 import {
@@ -63,7 +64,7 @@ export const exportDataAtom = atom(
 
 export const importDataAtom = atom(
     null,
-    (get, set, { data, options, conflictResolutions }: {
+    async (get, set, { data, options, conflictResolutions }: {
         data: ExportedData;
         options: ImportOptions;
         conflictResolutions?: Map<string, ConflictResolution>
@@ -72,10 +73,12 @@ export const importDataAtom = atom(
             set(isImportingAtom, true);
             const service = storageManager.get();
             const result = service.importData(data, options, conflictResolutions);
+            await service.flush?.();
 
             if (result.success) {
                 set(tasksAtom, RESET);
                 set(userListsAtom, RESET);
+                set(projectGoalsAtom, RESET);
                 set(storedSummariesAtom, RESET);
                 set(echoReportsAtom, RESET);
                 set(appearanceSettingsAtom, RESET);

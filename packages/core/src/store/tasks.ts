@@ -7,6 +7,8 @@ import {
 } from '@/utils/dateUtils';
 import storageManager from '@/services/storageManager';
 import { LocalDataAtom } from './types';
+import { userListsAtom } from './lists';
+import { isArchivedTask } from '@/services/projects';
 
 /**
  * Determines the group category for a task based on its due date and status.
@@ -86,6 +88,11 @@ tasksAtom.onMount = (setSelf) => {
 // --- Derived Task Atoms ---
 export const selectedTaskIdAtom = atom<string | null>(null);
 
+export const activeProjectTasksAtom = atom(get => {
+    const lists = get(userListsAtom) ?? [];
+    return (get(tasksAtom) ?? []).filter(task => !isArchivedTask(task, lists));
+});
+
 export const selectedTaskAtom = atom((get) => {
     const tasks = get(tasksAtom);
     const selectedId = get(selectedTaskIdAtom);
@@ -94,7 +101,7 @@ export const selectedTaskAtom = atom((get) => {
 });
 
 export const groupedAllTasksAtom = atom((get): Record<TaskGroupCategory, Task[]> => {
-    const tasksToGroup = (get(tasksAtom) ?? []).filter(t => t.listName !== 'Trash' && !t.completed)
+    const tasksToGroup = get(activeProjectTasksAtom).filter(t => t.listName !== 'Trash' && !t.completed)
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.createdAt ?? 0) - (b.createdAt ?? 0));
     const groups: Record<TaskGroupCategory, Task[]> = { overdue: [], today: [], next7days: [], later: [], nodate: [] };
     tasksToGroup.forEach(task => {

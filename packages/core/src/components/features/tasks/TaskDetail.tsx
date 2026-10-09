@@ -1,3 +1,4 @@
+import { projectGoalsAtom } from '@/store/projects';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
@@ -119,6 +120,9 @@ const TaskDetail: React.FC = () => {
     const selectedTask = useAtomValue(selectedTaskAtom);
     const setSelectedTaskId = useSetAtom(selectedTaskIdAtom);
     const allUserLists = useAtomValue(userListsAtom);
+    const projectGoals = useAtomValue(projectGoalsAtom) ?? [];
+    const taskProject = allUserLists?.find(list => list.id === selectedTask?.listId);
+    const isProjectReadOnly = !!taskProject?.archivedAt || taskProject?.status === 'completed';
     const preferencesData = useAtomValue(preferencesSettingsAtom);
     const isLoadingPreferences = useAtomValue(preferencesSettingsLoadingAtom);
     const preferences = useMemo(() => preferencesData ?? defaultPreferencesSettingsForApi(), [preferencesData]);
@@ -486,7 +490,7 @@ const TaskDetail: React.FC = () => {
 
     const isTrash = useMemo(() => selectedTask?.listName === 'Trash', [selectedTask?.listName]);
     const isCompleted = useMemo(() => (selectedTask?.completed || (selectedTask?.completePercentage ?? 0) === 100) && !isTrash, [selectedTask?.completed, selectedTask?.completePercentage, isTrash]);
-    const isInteractiveDisabled = useMemo(() => isTrash || isCompleted, [isTrash, isCompleted]);
+    const isInteractiveDisabled = isTrash || isCompleted || isProjectReadOnly;
 
     const handleSubtaskSubmit = useCallback((e: React.FormEvent) => {
         e.preventDefault();
@@ -579,7 +583,7 @@ const TaskDetail: React.FC = () => {
         return t('priorityLabels.none');
     }, [selectedTask, taskListPriorityMap, t]);
 
-    const titleInputClasses = useMemo(() => twMerge("flex-1 text-lg font-medium border-none focus:ring-0 focus:outline-none bg-transparent p-0 leading-tight", "placeholder:text-grey-medium dark:placeholder:text-neutral-500 placeholder:font-normal", (isInteractiveDisabled) && "line-through text-grey-medium dark:text-neutral-400/80", "text-grey-dark dark:text-neutral-100 tracking-tight"), [isInteractiveDisabled]);
+    const titleInputClasses = useMemo(() => twMerge("flex-1 text-lg font-medium border-none focus:ring-0 focus:outline-none bg-transparent p-0 leading-tight", "placeholder:text-grey-medium dark:placeholder:text-neutral-500 placeholder:font-normal", (isTrash || isCompleted) && "line-through text-grey-medium dark:text-neutral-400/80", "text-grey-dark dark:text-neutral-100 tracking-tight"), [isTrash, isCompleted]);
     const editorContainerClass = useMemo(() => twMerge("flex-1 min-h-0 overflow-hidden px-5"), []);
     const editorClasses = useMemo(() => twMerge("!h-full text-sm !bg-transparent !border-none !shadow-none", (isInteractiveDisabled) && "opacity-60 cursor-not-allowed", isTrash && "pointer-events-none", "dark:!text-neutral-300"), [isInteractiveDisabled, isTrash]);
     const footerClass = useMemo(() => twMerge("px-4 py-2 h-11 flex items-center justify-between flex-shrink-0", "border-t border-grey-light/50 dark:border-neutral-700/50", "bg-white/70 dark:bg-neutral-850/70 backdrop-blur-sm"), []);
@@ -607,7 +611,7 @@ const TaskDetail: React.FC = () => {
         { label: t('taskDetail.progressLabels.completed'), value: 100, icon: 'circle-check' as IconName, iconStroke: 2 },
     ], [t]);
 
-    const availableLists = useMemo(() => (allUserLists ?? []).filter(l => l.name !== 'Trash'), [allUserLists]);
+    const availableLists = useMemo(() => (allUserLists ?? []).filter(l => l.name !== 'Trash' && !l.archivedAt && l.status !== 'completed'), [allUserLists]);
 
     const handleMoreActionsDropdownCloseFocus = useCallback((event: Event) => {
         if (isHeaderMenuDatePickerOpen || isHeaderMenuTagsPopoverOpen) {
@@ -638,7 +642,7 @@ const TaskDetail: React.FC = () => {
                     <div className="flex items-center flex-1 min-w-0 gap-x-2.5 mr-3">
                         <ProgressIndicator
                             percentage={selectedTask.completePercentage}
-                            isTrash={isTrash}
+                            isTrash={isTrash || isProjectReadOnly}
                             onClick={cycleCompletionPercentage}
                             size={22}
                             className="flex-shrink-0"
@@ -674,7 +678,7 @@ const TaskDetail: React.FC = () => {
                                 onBlur={handleMainContentBlur}
                                 className={titleInputClasses}
                                 placeholder={t('taskDetail.titlePlaceholder')}
-                                disabled={isTrash}
+                                disabled={isTrash || isProjectReadOnly}
                                 aria-label="Task title"
                                 id={`task-title-input-${selectedTask.id}`}
                             />
@@ -692,7 +696,7 @@ const TaskDetail: React.FC = () => {
                                 }
                             }}
                         >
-                            <DropdownMenu.Trigger asChild>
+                            <DropdownMenu.Trigger asChild disabled={isProjectReadOnly}>
                                 <Button ref={moreActionsButtonRef} variant="ghost" size="icon"
                                     icon="more-horizontal"
                                     className={twMerge(actionButtonClass, "w-8 h-8")}
@@ -786,7 +790,7 @@ const TaskDetail: React.FC = () => {
                                     <DropdownMenu.Sub>
                                         <DropdownMenu.SubTrigger
                                             className={getSubTriggerClasses()}
-                                            disabled={isTrash}
+                                            disabled={isTrash || isProjectReadOnly}
                                             onPointerEnter={() => {
                                                 if (isHeaderMenuDatePickerOpen) handleHeaderMenuPopoverOpenChange(false, 'date');
                                                 if (isHeaderMenuTagsPopoverOpen) handleHeaderMenuPopoverOpenChange(false, 'tags');
@@ -815,7 +819,7 @@ const TaskDetail: React.FC = () => {
                                                             key={list.id}
                                                             value={list.name}
                                                             className={getRadioItemClasses(selectedTask.listName === list.name)}
-                                                            disabled={isTrash}
+                                                            disabled={isTrash || isProjectReadOnly}
                                                         >
                                                             <Icon name={list.name === 'Inbox' ? 'inbox' : 'list'}
                                                                 size={14} strokeWidth={1.5}
@@ -968,7 +972,7 @@ const TaskDetail: React.FC = () => {
                                     </Popover.Root>
 
                                     <DropdownMenu.Separator className="h-px bg-grey-light dark:bg-neutral-700 my-1" />
-                                    <RadixMenuItem icon="copy-plus" onSelect={handleDuplicateTask} disabled={isTrash}>
+                                    <RadixMenuItem icon="copy-plus" onSelect={handleDuplicateTask} disabled={isTrash || isProjectReadOnly}>
                                         {t('taskDetail.duplicate')}
                                     </RadixMenuItem>
                                     <DropdownMenu.Separator className="h-px bg-grey-light dark:bg-neutral-700 my-1" />
@@ -1003,6 +1007,15 @@ const TaskDetail: React.FC = () => {
                     </div>
                 </div>
 
+                {taskProject && taskProject.name !== 'Inbox' && !isTrash && <div className="px-5 py-3 border-b border-grey-light/50 dark:border-neutral-700 flex flex-wrap items-center gap-3 text-xs">
+                    <label className="flex items-center gap-2 min-w-0">{t('projects.linkedGoal')}
+                        <select aria-label={t('projects.linkedGoal')} className="bg-transparent border border-grey-light dark:border-neutral-600 rounded px-2 py-1 max-w-[220px]" value={selectedTask.goalId ?? ''} disabled={isProjectReadOnly} onChange={event => updateTaskImmediately({ goalId: event.target.value || null })}>
+                            <option value="">{t('projects.unlinked')}</option>{projectGoals.filter(goal => goal.projectId === selectedTask.listId).map(goal => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+                        </select>
+                    </label>
+                    <label className="flex items-center gap-2"><input type="checkbox" checked={!!selectedTask.urgent} disabled={isInteractiveDisabled} onChange={event => updateTaskImmediately({ urgent: event.target.checked })} />{t('projects.markUrgent')}</label>
+                    {isProjectReadOnly && <span>{t(taskProject.archivedAt ? 'projects.restoreToEdit' : 'projects.reopenToEdit')}</span>}
+                </div>}
                 <div className="flex-1 overflow-y-auto styled-scrollbar-thin flex flex-col bg-transparent">
                     <div className={editorContainerClass}>
                         <CodeMirrorEditor
@@ -1165,7 +1178,7 @@ const TaskDetail: React.FC = () => {
                             <Tooltip.Root delayDuration={300} open={isStartDateTooltipOpen}
                                 onOpenChange={setIsStartDateTooltipOpen}>
                                 <Tooltip.Trigger asChild>
-                                    <Popover.Trigger asChild disabled={isTrash}>
+                                    <Popover.Trigger asChild disabled={isTrash || isProjectReadOnly}>
                                         <button className={footerStartDateTriggerClass} aria-label={t('taskDetail.setStartDate')}>
                                             {displayStartDateForRender && isValid(displayStartDateForRender)
                                                 ? formatRelativeDate(displayStartDateForRender, t, true, preferences?.language)
@@ -1208,7 +1221,7 @@ const TaskDetail: React.FC = () => {
                             <Tooltip.Root delayDuration={300} open={isDateTooltipOpen}
                                 onOpenChange={setIsDateTooltipOpen}>
                                 <Tooltip.Trigger asChild>
-                                    <Popover.Trigger asChild disabled={isTrash}>
+                                    <Popover.Trigger asChild disabled={isTrash || isProjectReadOnly}>
                                         <button className={footerDateTriggerClass} aria-label={t('taskDetail.setDueDate')}>
                                             {displayDueDateForRender && isValid(displayDueDateForRender)
                                                 ? formatRelativeDate(displayDueDateForRender, t, true, preferences?.language)

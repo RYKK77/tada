@@ -7,7 +7,7 @@ import {
     preferencesSettingsAtom,
     selectedTaskIdAtom,
     settingsSelectedTabAtom,
-    tasksAtom,
+    activeProjectTasksAtom,
     userListsAtom,
     userProfileAtom
 } from '@/store/jotai.ts';
@@ -34,12 +34,13 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Task } from '@/types';
-import { isSameDay, safeParseDate, startOfDay } from '@/utils/dateUtils';
+import { addDays, isSameDay, safeParseDate, startOfDay } from '@/utils/dateUtils';
 import { useTaskOperations } from '@/hooks/useTaskOperations';
 import { twMerge } from 'tailwind-merge';
 import { useTranslation } from 'react-i18next';
 import { AI_PROVIDERS } from "@/config/aiProviders";
 import { analyzeTaskInputWithAI, isAIConfigValid, suggestListForTaskWithAI } from "@/services/aiService";
+import { getTaskDateContext, resolveAiTaskDates } from '@/services/ai/taskDates';
 import Icon from "@/components/ui/Icon";
 import Button from "@/components/ui/Button";
 import { ProgressIndicator } from "@/components/features/tasks/TaskItem";
@@ -242,7 +243,7 @@ const DroppableListContainer = ({ id, items, children, className }: { id: string
 const ZenModeView: React.FC = () => {
     const { t, i18n } = useTranslation();
     const [preferences, setPreferences] = useAtom(preferencesSettingsAtom);
-    const tasks = useAtomValue(tasksAtom);
+    const tasks = useAtomValue(activeProjectTasksAtom);
     const allUserLists = useAtomValue(userListsAtom);
     const aiSettings = useAtomValue(aiSettingsAtom);
     const userProfile = useAtomValue(userProfileAtom);
@@ -565,7 +566,7 @@ const ZenModeView: React.FC = () => {
         setIsAiProcessing(true);
 
         try {
-            const systemPrompt = tZen('prompts.taskAnalysis', { currentDate: new Date().toLocaleDateString() });
+            const systemPrompt = tZen('prompts.taskAnalysis', getTaskDateContext());
             const aiAnalysis = await analyzeTaskInputWithAI(prompt, aiSettings!, systemPrompt, userProfile);
 
             const defaultList = preferences?.defaultNewTaskList || 'Inbox';
@@ -575,7 +576,9 @@ const ZenModeView: React.FC = () => {
             if (!targetList) throw new Error("Target list not found");
 
             const now = Date.now();
-            const dueDate = aiAnalysis.dueDate ? new Date(aiAnalysis.dueDate).getTime() : startOfDay(new Date()).getTime();
+            let fallbackDueDate: Date | null = null;
+            if (preferences?.defaultNewTaskDueDate === 'today') fallbackDueDate = startOfDay(new Date(now));
+            else if (preferences?.defaultNewTaskDueDate === 'tomorrow') fallbackDueDate = startOfDay(addDays(new Date(now), 1));
 
             const newTask = createTask({
                 title: aiAnalysis.title || prompt,
@@ -585,8 +588,7 @@ const ZenModeView: React.FC = () => {
                 completed: false,
                 completedAt: null,
                 completePercentage: null,
-                startDate: aiAnalysis.dueDate ? Date.now() : now,
-                dueDate: dueDate,
+                ...resolveAiTaskDates(aiAnalysis, fallbackDueDate),
                 priority: aiAnalysis.priority,
                 order: now,
                 tags: aiAnalysis.tags,
@@ -598,7 +600,7 @@ const ZenModeView: React.FC = () => {
                     createSubtask(newTask.id, {
                         title: sub.title,
                         order: index * 1000,
-                        dueDate: sub.dueDate ? (new Date(sub.dueDate).getTime()) : null
+                        dueDate: sub.dueDate ? (safeParseDate(sub.dueDate)?.getTime() ?? null) : null
                     });
                 });
             }

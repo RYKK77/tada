@@ -8,7 +8,7 @@ import {useTranslation} from "react-i18next";
 import { useListOperations } from '@/hooks/useListOperations';
 
 interface AddListModalProps {
-    onAddSuccess: () => void;
+    onAddSuccess: (id: string) => void;
 }
 
 /**
@@ -73,8 +73,8 @@ const AddListModal: React.FC<AddListModalProps> = ({onAddSuccess}) => {
         setIsLoading(true);
 
         try {
-            createList({name: trimmedName});
-            onAddSuccess();
+            const project = createList({name: trimmedName});
+            onAddSuccess(project.id);
             handleOpenChange(false);
         } catch (e: any) {
             setError(e.message || "Failed to create list.");

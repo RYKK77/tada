@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Tada · 项目管理测试</title></head>
+<body><div id="root"></div><script type="module">
+// QA-only entry: use synthetic data and memory storage before loading any app code.
+// It never reads or writes the browser's actual localStorage or the desktop database.
+const memory = new Map();
+const storage = { getItem: key => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, String(value)), removeItem: key => memory.delete(key), clear: () => memory.clear(), key: index => [...memory.keys()][index] ?? null, get length() { return memory.size; } };
+Object.defineProperty(window, 'localStorage', { value: storage });
+const now = Date.now();
+const today = new Date(); today.setHours(0,0,0,0);
+const due = offset => { const date = new Date(today); date.setDate(date.getDate() + offset); return date.getTime(); };
+const set = (key,value) => storage.setItem(key, JSON.stringify(value));
+set('tada-lists', [{ id:'inbox',name:'Inbox',icon:'inbox',order:0 },{id:'qa-project',name:'项目管理体验升级',summary:'让每一个日常行动，都能连接到清晰的项目目标。',description:'## 我们希望解决什么\n用户能够同时看清项目方向与下一步行动。\n\n## 第一阶段范围\n- 项目概览与目标管理\n- 任务关联和紧急事项\n- 完整保留已有任务',status:'active',order:1},{id:'qa-legacy',name:'旧列表兼容测试',order:2}]);
+set('tada-project-goals',[{id:'goal-long',projectId:'qa-project',title:'建立清晰的个人项目工作流',criteria:'能完成从项目规划、任务执行到结项归档的完整流程。',kind:'long',parentId:null,status:'active',targetDate:null,order:1,createdAt:now,updatedAt:now},{id:'goal-short',projectId:'qa-project',title:'完成第一版项目概览',criteria:'概述可编辑，目标可关联任务，紧急事项能自动汇总。',kind:'short',parentId:'goal-long',status:'active',targetDate:due(7),order:2,createdAt:now,updatedAt:now}]);
+set('tada-tasks',[['qa-task-1','确认项目概览的信息结构',-1,1,true],['qa-task-2','验证旧列表升级后的数据',0,2,false],['qa-task-3','补充任务关联交互',2,2,false],['qa-task-4','整理后续迭代想法',20,1,false]].map(([id,title,offset,priority,urgent],order)=>({id,title,listId:'qa-project',listName:'项目管理体验升级',goalId:order<3?'goal-short':null,content:'这是合成测试任务，不包含任何私人数据。',completed:false,completedAt:null,completePercentage:null,startDate:null,dueDate:due(offset),priority,urgent,order,createdAt:now,updatedAt:now,groupCategory:'nodate',tags:[],subtasks:[]})));
+set('tada-userProfile',{persona:null,workRealityModel:{taskView:null,uncertaintyTolerance:null,incompletionStyle:null,confidence:{taskView:.7,uncertaintyTolerance:.7,incompletionStyle:.7}},userNote:null,onboardingCompleted:true,createdAt:now,updatedAt:now});
+set('tada-preferencesSettings',{language:'zh-CN',defaultNewTaskDueDate:null,defaultNewTaskPriority:null,defaultNewTaskList:'Inbox',confirmDeletions:true,enableEcho:false,alwaysUseAITask:false,scheduleSettings:{enabled:false,time:'18:00',days:[]}});
+set('tada-appearanceSettings',{themeId:'default-coral',darkMode:'light',interfaceDensity:'default',textSize:'default',fontWeight:'regular'});
+// Optional offline AI fixture exercises the real streaming and adoption UI without network calls.
+if (new URLSearchParams(location.search).has('mock-ai')) {
+    set('tada-aiSettings',{provider:'custom',apiKey:'synthetic-key',model:'synthetic-model',baseUrl:'https://tada-project-qa.invalid',availableModels:[]});
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input,init) => {
+        const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+        if (!url.startsWith('https://tada-project-qa.invalid')) return originalFetch(input,init);
+        if (window.__projectMockFailure) return new Response('Synthetic failure',{status:503});
+        const body=JSON.parse(init.body); window.__projectMockRequest=body;
+        const system=body.messages[0].content;
+        const output=system.includes('Markdown weekly review') ? '# 本周项目复盘\n\n暂无已完成任务。建议下周推进任务验收。' : system.includes('next-action tasks') ? JSON.stringify([{title:'核验合成项目的关键路径'},{title:'补充验收记录'}]) : JSON.stringify([{title:'建立可复用的验收流程',kind:'long',criteria:'每次发布都有明确验收记录',parentId:null},{title:'完成本周验收',kind:'short',criteria:'记录三项关键流程测试结果',parentId:'goal-long'}]);
+        const encoder=new TextEncoder();
+        return new Response(new ReadableStream({start(controller){
+            if (window.__projectMockPending) { init.signal.addEventListener('abort',()=>controller.error(new DOMException('Aborted','AbortError')),{once:true}); return; }
+            controller.enqueue(encoder.encode('data: '+JSON.stringify({choices:[{delta:{content:output}}]})+'\n\n'));
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));controller.close();
+        }}),{headers:{'Content-Type':'text/event-stream'}});
+    };
+}
+if (!location.hash) location.hash = '/projects/qa-project';
+const RefreshRuntime = (await import('/tada/@react-refresh')).default;
+RefreshRuntime.injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => type => type;
+window.__vite_plugin_react_preamble_installed__ = true;
+await import('/tada/src/main.tsx');
+</script></body></html>

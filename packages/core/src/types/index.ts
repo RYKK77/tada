@@ -13,6 +13,39 @@ export interface List {
     icon?: string | null;
     color?: string | null;
     order?: number | null;
+    summary?: string;
+    description?: string;
+    status?: ProjectStatus;
+    targetDate?: number | null;
+    archivedAt?: number | null;
+    createdAt?: number;
+    updatedAt?: number;
+    weeklyFocus?: { weekOf: string; taskIds: string[] };
+    risks?: string;
+    reviews?: ProjectReview[];
+}
+
+export interface ProjectReview {
+    id: string;
+    createdAt: number;
+    updatedAt: number;
+    content: string;
+    source: 'manual' | 'ai';
+}
+
+export type ProjectStatus = 'planned' | 'active' | 'paused' | 'completed';
+export interface ProjectGoal {
+    id: string;
+    projectId: string;
+    title: string;
+    kind: 'long' | 'short';
+    parentId: string | null;
+    criteria: string;
+    status: 'planned' | 'active' | 'achieved';
+    targetDate: number | null;
+    order: number;
+    createdAt: number;
+    updatedAt: number;
 }
 
 /**
@@ -44,6 +77,8 @@ export interface Task {
     dueDate?: number | null;
     listId: string | null;
     listName: string;
+    goalId?: string | null;
+    urgent?: boolean;
     content?: string;
     order: number;
     createdAt: number;
@@ -63,6 +98,8 @@ export type TaskFilter =
     | 'next7days'
     | 'completed'
     | 'trash'
+    | 'projects'
+    | `project-${string}`
     | `list-${string}`
     | `tag-${string}`;
 
@@ -198,6 +235,7 @@ export interface ExportedData {
         };
         userProfile: UserProfile | null;
         lists: List[];
+        goals?: ProjectGoal[];
         tasks: Task[];
         summaries: StoredSummary[];
         echoReports: EchoReport[];
@@ -214,7 +252,7 @@ export type ConflictResolution = 'keep-local' | 'keep-imported' | 'keep-newer' |
  */
 export interface DataConflict {
     id: string;
-    type: 'list' | 'task' | 'summary' | 'echo';
+    type: 'list' | 'task' | 'summary' | 'echo' | 'goal';
     local: any;
     imported: any;
 }

@@ -58,10 +58,13 @@ export interface AIProviderAdapter {
 export interface AiTaskAnalysis {
     title: string;
     content?: string;
-    subtasks: { dueDate?: string; title: string }[];
+    subtasks: { startDate?: string | null; dueDate?: string | null; title: string }[];
     tags: string[];
     priority: number | null;
+    startDate: string | null;
     dueDate: string | null;
+    /** Duration explicitly stated by the user, normalized to minutes. */
+    durationMinutes?: number | null;
 }
 
 /**

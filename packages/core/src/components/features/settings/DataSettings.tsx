@@ -4,6 +4,7 @@ import {
     addNotificationAtom,
     tasksAtom,
     userListsAtom,
+    projectGoalsAtom,
     storedSummariesAtom,
     appearanceSettingsAtom,
     preferencesSettingsAtom,
@@ -101,7 +102,7 @@ const ConflictResolutionDialog: React.FC<{
                                 <div key={conflict.id} className="border border-grey-light dark:border-neutral-700 rounded-base p-4">
                                     <div className="flex items-center justify-between mb-3">
                                         <h4 className="text-[14px] font-medium text-grey-dark dark:text-neutral-100">
-                                            {conflict.type === 'task' ? conflict.local.title : conflict.local.name}
+                                            {(conflict.type === 'task' || conflict.type === 'goal') ? conflict.local.title : conflict.local.name}
                                         </h4>
                                         <span className="text-[11px] text-grey-medium dark:text-neutral-400 bg-grey-ultra-light dark:bg-neutral-700 px-2 py-1 rounded">
                                             {conflict.type}
@@ -205,6 +206,7 @@ const DataSettings: React.FC = () => {
     const addNotification = useSetAtom(addNotificationAtom);
     const [, setTasks] = useAtom(tasksAtom);
     const [, setLists] = useAtom(userListsAtom);
+    const setGoals = useSetAtom(projectGoalsAtom);
     const [, setSummaries] = useAtom(storedSummariesAtom);
     const [, setAppearanceSettings] = useAtom(appearanceSettingsAtom);
     const [, setPreferencesSettings] = useAtom(preferencesSettingsAtom);
@@ -332,16 +334,18 @@ const DataSettings: React.FC = () => {
         }
     }, [addNotification, t]);
 
-    const performImport = useCallback((data: ExportedData, options: ImportOptions, conflictResolutions?: Map<string, ConflictResolution>) => {
+    const performImport = useCallback(async (data: ExportedData, options: ImportOptions, conflictResolutions?: Map<string, ConflictResolution>) => {
         try {
             setIsImporting(true);
             const storage = storageManager.get();
             const result = storage.importData(data, options, conflictResolutions);
+            await storage.flush?.();
 
             if (result.success) {
                 // Refresh all atoms to reflect imported data
                 setTasks(storage.fetchTasks());
                 setLists(storage.fetchLists());
+                setGoals(storage.fetchGoals());
                 setSummaries(storage.fetchSummaries());
 
                 const settings = storage.fetchSettings();
@@ -374,7 +378,7 @@ const DataSettings: React.FC = () => {
             setConflicts([]);
             setPendingImport(null);
         }
-    }, [addNotification, t, setTasks, setLists, setSummaries, setAppearanceSettings, setPreferencesSettings, setAISettings]);
+    }, [addNotification, t, setTasks, setLists, setGoals, setSummaries, setAppearanceSettings, setPreferencesSettings, setAISettings]);
 
     const handleImportFile = useCallback((file: File) => {
         const reader = new FileReader();

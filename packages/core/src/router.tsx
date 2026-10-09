@@ -1,12 +1,14 @@
 import React, { lazy, useEffect } from 'react';
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from 'react-router-dom';
-import { useAtom, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
-import { currentFilterAtom, selectedTaskIdAtom } from '@/store/jotai';
+import { currentFilterAtom, selectedTaskIdAtom, userListsAtom } from '@/store/jotai';
 import { TaskFilter } from '@/types';
 import MainLayout from '@/components/features/layout/MainLayout';
 
 // Lazy load pages for better initial load performance.
+const ProjectPage = lazy(() => import('@/pages/ProjectPage'));
+const ProjectsPage = lazy(() => import('@/pages/ProjectPage').then(module => ({ default: module.ProjectsPage })));
 const MainPage = lazy(() => import('@/pages/MainPage'));
 const SummaryPage = lazy(() => import('@/pages/SummaryPage'));
 const CalendarPage = lazy(() => import('@/pages/CalendarPage'));
@@ -33,7 +35,9 @@ const RouteChangeHandler: React.FC = () => {
         const tagName = params.tagName ? decodeURIComponent(params.tagName) : '';
 
         let newFilter: TaskFilter = 'all';
-        if (pathname === '/today') newFilter = 'today';
+        if (pathname === '/projects') newFilter = 'projects';
+        else if (params.projectId) newFilter = `project-${params.projectId}`;
+        else if (pathname === '/today') newFilter = 'today';
         else if (pathname === '/next7days') newFilter = 'next7days';
         else if (pathname === '/completed') newFilter = 'completed';
         else if (pathname === '/trash') newFilter = 'trash';
@@ -45,7 +49,7 @@ const RouteChangeHandler: React.FC = () => {
             setCurrentFilter(newFilter);
             setSelectedTaskId(null); // Deselect task when filter changes
         }
-    }, [pathname, params.listName, params.tagName, currentFilterInternal, setCurrentFilter, setSelectedTaskId]);
+    }, [pathname, params.projectId, params.listName, params.tagName, currentFilterInternal, setCurrentFilter, setSelectedTaskId]);
 
     return <Outlet />;
 };
@@ -56,9 +60,12 @@ const RouteChangeHandler: React.FC = () => {
  */
 const ListPageWrapper: React.FC = () => {
     const { t } = useTranslation();
+    const lists = useAtomValue(userListsAtom);
     const { listName } = useParams<{ listName: string }>();
     const decodedListName = listName ? decodeURIComponent(listName) : 'Inbox';
 
+    const project = lists?.find(list => list.name === decodedListName && list.name !== 'Inbox');
+    if (project) return <Navigate to={`/projects/${encodeURIComponent(project.id)}`} replace />;
     if (!decodedListName) return <Navigate to="/list/Inbox" replace />;
 
     const filter: TaskFilter = `list-${decodedListName}`;
@@ -99,6 +106,8 @@ const AppRouter: React.FC = () => {
             <Route path="/" element={<MainLayout />}>
                 <Route element={<RouteChangeHandler />}>
                     <Route index element={<Navigate to="/all" replace />} />
+                    <Route path="projects" element={<ProjectsPage />} />
+                    <Route path="projects/:projectId" element={<ProjectPage />} />
                     <Route path="all" element={<MainPage title={t('sidebar.allTasks')} filter="all" />} />
                     <Route path="today" element={<MainPage title={t('sidebar.today')} filter="today" />} />
                     <Route path="next7days" element={<MainPage title={t('sidebar.next7days')} filter="next7days" />} />

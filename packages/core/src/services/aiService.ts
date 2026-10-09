@@ -5,6 +5,8 @@ import { stripBase64Images } from "@/utils/markdownUtils";
 import { fetchWithProxy } from "@/utils/networkUtils";
 import { aiCache, withCache } from './ai/cache';
 import { withRetry } from './ai/retry';
+import type { AiTaskAnalysis } from './ai/types';
+export type { AiTaskAnalysis } from './ai/types';
 
 /**
  * Generates a context string from UserProfile for injection into AI prompts.
@@ -60,16 +62,6 @@ export const generateUserProfileContext = (userProfile: UserProfile | null | und
 
     return parts.length > 0 ? `\n\n**User Context**:\n${parts.join("\n")}` : "";
 };
-
-export interface AiTaskAnalysis {
-    title: string;
-    content?: string;
-    subtasks: { startDate?: string; dueDate?: string; title: string }[];
-    tags: string[];
-    priority: number | null;
-    startDate: string | null;
-    dueDate: string | null;
-}
 
 export interface AiListSuggestion {
     listName: string;
@@ -550,13 +542,13 @@ export const streamChatCompletionForEditor = async (
 
     return new ReadableStream({
         async start(controller) {
-            signal.addEventListener('abort', () => {
-                reader.cancel();
-                controller.close();
-            });
+            const abort = () => { void reader.cancel().catch(() => undefined); };
+            signal.addEventListener('abort', abort, { once: true });
+            if (signal.aborted) abort();
 
             try {
                 for await (const chunk of streamResponse(reader, decoder, provider.id)) {
+                    if (signal.aborted) break;
                     if (chunk.startsWith('data: ')) {
                         const dataStr = chunk.substring(6);
                         if (dataStr === '[DONE]') break;
@@ -573,10 +565,13 @@ export const streamChatCompletionForEditor = async (
                         } catch (e) { /* ignore parse errors on partial chunks */ }
                     }
                 }
-            } catch (error) {
-                controller.error(error);
-            } finally {
                 controller.close();
+            } catch (error) {
+                if (signal.aborted) controller.close();
+                else controller.error(error);
+            } finally {
+                signal.removeEventListener('abort', abort);
+                reader.releaseLock();
             }
         }
     });

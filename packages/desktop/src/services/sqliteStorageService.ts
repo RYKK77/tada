@@ -1,9 +1,11 @@
+import { normalizeProject, normalizeGoals, normalizeTaskProject, taskProjectUpdates, mergeImportedGoals, goalImportConflicts, assertProjectCompletion } from '@tada/core/projects';
 import Database from '@tauri-apps/plugin-sql';
 import { IStorageService } from '@tada/core/services/storageInterface';
 import {
     AISettings,
     AppearanceSettings,
     List,
+    ProjectGoal,
     PreferencesSettings,
     StoredSummary,
     Task,
@@ -42,6 +44,9 @@ interface DbTask {
     tags: string | null;
     priority: number | null;
     group_category: string;
+    goal_id: string | null;
+    urgent: number;
+    start_date: number | null;
 }
 
 interface DbSubtask {
@@ -57,6 +62,7 @@ interface DbSubtask {
 }
 
 interface DbList {
+    project_metadata: string | null;
     id: string;
     name: string;
     icon: string | null;
@@ -100,6 +106,7 @@ interface BatchOperation {
 export class SqliteStorageService implements IStorageService {
     private db: Database | null = null;
     private listsCache: List[] = [];
+    private goalsCache: ProjectGoal[] = [];
     private tasksCache: Task[] = [];
     private summariesCache: StoredSummary[] = [];
     private echoReportsCache: EchoReport[] = [];
@@ -119,6 +126,8 @@ export class SqliteStorageService implements IStorageService {
 
     private writeQueue: Array<() => Promise<void>> = [];
     private isProcessingQueue = false;
+    private drainingWrites: Promise<void> | null = null;
+    private writeError: unknown = null;
 
     async initialize(): Promise<void> {
         try {
@@ -166,7 +175,8 @@ export class SqliteStorageService implements IStorageService {
                 this.fetchSummariesAsync(),
                 this.fetchEchoReportsAsync(),
                 this.fetchSettingsAsync(),
-                this.fetchUserProfileAsync()
+                this.fetchUserProfileAsync(),
+                this.fetchGoalsAsync()
             ]);
             this.listsCache = lists;
             this.tasksCache = tasks;
@@ -239,19 +249,19 @@ export class SqliteStorageService implements IStorageService {
         }
     }
 
-    private async processWriteQueue(): Promise<void> {
+    private processWriteQueue(): Promise<void> {
+        if (this.drainingWrites) return this.drainingWrites;
         this.isProcessingQueue = true;
-        while (this.writeQueue.length > 0) {
-            const operation = this.writeQueue.shift();
-            if (operation) {
-                try {
-                    await operation();
-                } catch (error) {
-                    console.error('Write operation failed:', error);
+        this.drainingWrites = (async () => {
+            while (this.writeQueue.length > 0) {
+                const operation = this.writeQueue.shift();
+                if (operation) {
+                    try { await operation(); }
+                    catch (error) { this.writeError = error; console.error('Write operation failed:', error); }
                 }
             }
-        }
-        this.isProcessingQueue = false;
+        })().finally(() => { this.isProcessingQueue = false; this.drainingWrites = null; });
+        return this.drainingWrites;
     }
 
     // Settings
@@ -384,6 +394,7 @@ export class SqliteStorageService implements IStorageService {
             icon: listData.icon || 'list',
             color: null,
             order: now,
+            status: 'planned', createdAt: now, updatedAt: now,
         };
         this.listsCache.push(newList);
         this.queueWrite(async () => { await this.insertList(newList); });
@@ -391,11 +402,13 @@ export class SqliteStorageService implements IStorageService {
     }
 
     private async insertList(list: List): Promise<void> {
-        const db = this.getDb();
         const now = Date.now();
-        await db.execute(
-            'INSERT INTO lists (id, name, icon, color, "order", created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [list.id, list.name, list.icon, list.color, list.order, now, now]
+        await this.getDb().execute(
+            `INSERT INTO lists (id, name, icon, color, "order", created_at, updated_at, project_metadata)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET name=excluded.name, icon=excluded.icon, color=excluded.color,
+             "order"=excluded."order", updated_at=excluded.updated_at, project_metadata=excluded.project_metadata`,
+            [list.id, list.name, list.icon ?? null, list.color ?? null, list.order ?? 0, list.createdAt ?? now, list.updatedAt ?? now, JSON.stringify(list)]
         );
     }
 
@@ -403,15 +416,20 @@ export class SqliteStorageService implements IStorageService {
         const index = this.listsCache.findIndex(l => l.id === listId);
         if (index === -1) throw new Error("List not found");
         const originalName = this.listsCache[index].name;
-        this.listsCache[index] = { ...this.listsCache[index], ...updates };
+        const updated = { ...this.listsCache[index], ...updates, updatedAt: Date.now() };
+        if (updates.status === 'completed') assertProjectCompletion(updated, this.tasksCache);
+        this.listsCache[index] = updated;
+        if (updates.name && updates.name !== originalName) {
+            this.tasksCache = this.tasksCache.map(task => task.listId === listId && task.listName !== 'Trash' ? { ...task, listName: updates.name!, updatedAt: Date.now() } : task);
+        }
 
         this.queueWrite(async () => {
-            await this.updateListInDb(listId, updates);
+            await this.insertList(updated);
             if (updates.name && updates.name !== originalName) {
                 const now = Date.now();
-                await this.getDb().execute('UPDATE tasks SET list_name = ?, updated_at = ? WHERE list_id = ?', [updates.name, now, listId]);
+                await this.getDb().execute("UPDATE tasks SET list_name = ?, updated_at = ? WHERE list_id = ? AND list_name != 'Trash'", [updates.name, now, listId]);
                 this.tasksCache.forEach(task => {
-                    if (task.listId === listId) {
+                    if (task.listId === listId && task.listName !== 'Trash') {
                         task.listName = updates.name!;
                         task.updatedAt = now;
                     }
@@ -422,18 +440,8 @@ export class SqliteStorageService implements IStorageService {
     }
 
     private async updateListInDb(listId: string, updates: Partial<List>): Promise<void> {
-        const db = this.getDb();
-        const now = Date.now();
-        const updateFields: string[] = [];
-        const values: any[] = [];
-        if (updates.name !== undefined) { updateFields.push('name = ?'); values.push(updates.name); }
-        if (updates.icon !== undefined) { updateFields.push('icon = ?'); values.push(updates.icon); }
-        if (updates.color !== undefined) { updateFields.push('color = ?'); values.push(updates.color); }
-        if (updates.order !== undefined) { updateFields.push('"order" = ?'); values.push(updates.order); }
-        if (updateFields.length === 0) return;
-        updateFields.push('updated_at = ?');
-        values.push(now, listId);
-        await db.execute(`UPDATE lists SET ${updateFields.join(', ')} WHERE id = ?`, values);
+        const list = this.listsCache.find(item => item.id === listId);
+        if (list) await this.insertList({ ...list, ...updates, updatedAt: Date.now() });
     }
 
     deleteList(listId: string): { message: string } {
@@ -443,11 +451,13 @@ export class SqliteStorageService implements IStorageService {
         const inbox = this.listsCache.find(l => l.name === 'Inbox');
         if (!inbox) throw new Error("Inbox not found");
 
+        this.goalsCache = this.goalsCache.filter(goal => goal.projectId !== listId);
         this.listsCache = this.listsCache.filter(l => l.id !== listId);
         this.tasksCache.forEach(task => {
             if (task.listId === listId) {
                 if (task.listName === 'Trash') { task.listId = null; }
                 else { task.listId = inbox.id; task.listName = inbox.name; }
+                task.goalId = null;
                 task.updatedAt = Date.now();
             }
         });
@@ -457,7 +467,8 @@ export class SqliteStorageService implements IStorageService {
             const now = Date.now();
             await db.execute('BEGIN TRANSACTION');
             try {
-                await db.execute(`UPDATE tasks SET list_id = CASE WHEN list_name = 'Trash' THEN NULL ELSE ? END, list_name = CASE WHEN list_name = 'Trash' THEN list_name ELSE ? END, updated_at = ? WHERE list_id = ?`, [inbox.id, inbox.name, now, listId]);
+                await db.execute(`UPDATE tasks SET list_id = CASE WHEN list_name = 'Trash' THEN NULL ELSE ? END, list_name = CASE WHEN list_name = 'Trash' THEN list_name ELSE ? END, goal_id = NULL, updated_at = ? WHERE list_id = ?`, [inbox.id, inbox.name, now, listId]);
+                await db.execute('DELETE FROM project_goals WHERE project_id = ?', [listId]);
                 await db.execute('DELETE FROM lists WHERE id = ?', [listId]);
                 await db.execute('COMMIT');
             } catch (error) {
@@ -469,23 +480,43 @@ export class SqliteStorageService implements IStorageService {
     }
 
     updateLists(lists: List[]): List[] {
+        lists = lists.map(normalizeProject);
+        if (!lists.some(list => list.name === 'Inbox')) lists.push({ id: 'inbox-default', name: 'Inbox', icon: 'inbox', order: 0 });
+        const removed = this.listsCache.filter(list => !lists.some(next => next.id === list.id));
         this.listsCache = lists;
         this.queueWrite(async () => {
             const db = this.getDb();
-            const now = Date.now();
             await db.execute('BEGIN TRANSACTION');
             try {
-                await db.execute('DELETE FROM lists');
-                for (const list of lists) {
-                    await db.execute('INSERT INTO lists (id, name, icon, color, "order", created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [list.id, list.name, list.icon || null, list.color || null, list.order || 0, now, now]);
-                }
+                for (const list of lists) await this.insertList(list);
+                for (const list of removed) await db.execute('DELETE FROM lists WHERE id = ?', [list.id]);
                 await db.execute('COMMIT');
-            } catch (error) {
-                await db.execute('ROLLBACK');
-                console.error(error);
-            }
+            } catch (error) { await db.execute('ROLLBACK'); throw error; }
         });
         return lists;
+    }
+
+    fetchGoals(): ProjectGoal[] { return this.goalsCache; }
+
+    async fetchGoalsAsync(): Promise<ProjectGoal[]> {
+        const rows = await this.getDb().select<{ data: string }[]>('SELECT data FROM project_goals');
+        this.goalsCache = rows.map(row => JSON.parse(row.data) as ProjectGoal);
+        return this.goalsCache;
+    }
+
+    updateGoals(goals: ProjectGoal[]): ProjectGoal[] {
+        const normalized = normalizeGoals(goals, this.listsCache);
+        this.goalsCache = normalized;
+        this.queueWrite(async () => {
+            const db = this.getDb();
+            await db.execute('BEGIN TRANSACTION');
+            try {
+                await db.execute('DELETE FROM project_goals');
+                for (const goal of normalized) await db.execute('INSERT INTO project_goals (id, project_id, data) VALUES (?, ?, ?)', [goal.id, goal.projectId, JSON.stringify(goal)]);
+                await db.execute('COMMIT');
+            } catch (error) { await db.execute('ROLLBACK'); throw error; }
+        });
+        return normalized;
     }
 
     // Tasks
@@ -518,18 +549,20 @@ export class SqliteStorageService implements IStorageService {
         const now = Date.now();
         const id = `task-${now}-${Math.random()}`;
         const newTask: Task = { ...taskData, id, createdAt: now, updatedAt: now, groupCategory: 'nodate' };
+        Object.assign(newTask, normalizeTaskProject(newTask, this.listsCache, this.goalsCache));
         this.tasksCache.push(newTask);
         this.queueWrite(async () => { await this.insertTask(newTask); });
         return newTask;
     }
 
-    private async insertTask(task: Task): Promise<void> {
+    private async insertTask(task: Task, upsert = false): Promise<void> {
         const db = this.getDb();
         await db.execute(`
-            INSERT INTO tasks (id, title, completed, completed_at, complete_percentage, due_date, list_id, list_name, content, "order", created_at, updated_at, tags, priority, group_category)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (id, title, completed, completed_at, complete_percentage, due_date, list_id, list_name, content, "order", created_at, updated_at, tags, priority, group_category, goal_id, urgent, start_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ${upsert ? 'ON CONFLICT(id) DO UPDATE SET title=excluded.title, completed=excluded.completed, completed_at=excluded.completed_at, complete_percentage=excluded.complete_percentage, due_date=excluded.due_date, list_id=excluded.list_id, list_name=excluded.list_name, content=excluded.content, "order"=excluded."order", updated_at=excluded.updated_at, tags=excluded.tags, priority=excluded.priority, group_category=excluded.group_category, goal_id=excluded.goal_id, urgent=excluded.urgent, start_date=excluded.start_date' : ''}
         `, [
-            task.id, task.title, task.completed ? 1 : 0, task.completedAt, task.completePercentage, task.dueDate || null, task.listId, task.listName, task.content || null, task.order, task.createdAt, task.updatedAt, task.tags ? JSON.stringify(task.tags) : null, task.priority, task.groupCategory
+            task.id, task.title, task.completed ? 1 : 0, task.completedAt, task.completePercentage, task.dueDate || null, task.listId, task.listName, task.content || null, task.order, task.createdAt, task.updatedAt, task.tags ? JSON.stringify(task.tags) : null, task.priority ?? null, task.groupCategory, task.goalId ?? null, task.urgent ? 1 : 0, task.startDate ?? null
         ]);
     }
 
@@ -537,6 +570,7 @@ export class SqliteStorageService implements IStorageService {
         const index = this.tasksCache.findIndex(t => t.id === taskId);
         if (index === -1) throw new Error("Task not found");
         const now = Date.now();
+        updates = taskProjectUpdates(this.tasksCache[index], updates, this.listsCache, this.goalsCache);
         this.tasksCache[index] = { ...this.tasksCache[index], ...updates, updatedAt: now };
         this.queueWrite(async () => { await this.updateTaskInDb(taskId, updates); });
         return this.tasksCache[index];
@@ -553,6 +587,9 @@ export class SqliteStorageService implements IStorageService {
                 case 'completed': updateFields.push('completed = ?'); values.push(value ? 1 : 0); break;
                 case 'completedAt': updateFields.push('completed_at = ?'); values.push(value); break;
                 case 'completePercentage': updateFields.push('complete_percentage = ?'); values.push(value); break;
+                case 'goalId': updateFields.push('goal_id = ?'); values.push(value); break;
+                case 'urgent': updateFields.push('urgent = ?'); values.push(value ? 1 : 0); break;
+                case 'startDate': updateFields.push('start_date = ?'); values.push(value); break;
                 case 'dueDate': updateFields.push('due_date = ?'); values.push(value); break;
                 case 'listId': updateFields.push('list_id = ?'); values.push(value); break;
                 case 'listName': updateFields.push('list_name = ?'); values.push(value); break;
@@ -606,58 +643,27 @@ export class SqliteStorageService implements IStorageService {
     }
 
     async batchUpdateTasks(tasks: Task[]): Promise<void> {
-        const updatesMap = new Map(tasks.map(t => [t.id, t]));
-        this.tasksCache = this.tasksCache.map(t =>
-            updatesMap.has(t.id) ? updatesMap.get(t.id)! : t
-        );
-
-        await this.queueWrite(async () => {
+        tasks = tasks.map(task => normalizeTaskProject(task, this.listsCache, this.goalsCache));
+        const updatesMap = new Map(tasks.map(task => [task.id, task]));
+        this.tasksCache = this.tasksCache.map(task => updatesMap.get(task.id) ?? task);
+        this.queueWrite(async () => {
             const db = this.getDb();
-            const now = Date.now();
             await db.execute('BEGIN TRANSACTION');
             try {
-                for (const task of tasks) {
-                    await db.execute(`
-                        INSERT OR REPLACE INTO tasks (
-                            id, title, completed, completed_at, complete_percentage, due_date, 
-                            list_id, list_name, content, "order", created_at, updated_at, 
-                            tags, priority, group_category
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `, [
-                        task.id, task.title, task.completed ? 1 : 0, task.completedAt, task.completePercentage, task.dueDate || null, task.listId, task.listName, task.content || null, task.order, task.createdAt, task.updatedAt, task.tags ? JSON.stringify(task.tags) : null, task.priority, task.groupCategory
-                    ]);
-                }
+                for (const task of tasks) await this.insertTask(task, true);
                 await db.execute('COMMIT');
-            } catch (error) {
-                await db.execute('ROLLBACK');
-                console.error(error);
-            }
+            } catch (error) { await db.execute('ROLLBACK'); throw error; }
         });
     }
 
-    async batchUpdateLists(lists: List[]): Promise<void> {
-        this.listsCache = lists;
-        await this.queueWrite(async () => {
-            const db = this.getDb();
-            const now = Date.now();
-            await db.execute('BEGIN TRANSACTION');
-            try {
-                for (const list of lists) {
-                    await db.execute('INSERT OR REPLACE INTO lists (id, name, icon, color, "order", created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [list.id, list.name, list.icon || null, list.color || null, list.order || 0, now, now]);
-                }
-                await db.execute('COMMIT');
-            } catch (error) {
-                await db.execute('ROLLBACK');
-                console.error(error);
-            }
-        });
-    }
+    async batchUpdateLists(lists: List[]): Promise<void> { this.updateLists(lists); }
 
     async flush(): Promise<void> {
         if (this.batchQueue.length > 0) {
             await this.processBatchQueue();
         }
         await this.processWriteQueue();
+        if (this.writeError) { const error = this.writeError; this.writeError = null; throw error; }
     }
 
     // Subtasks
@@ -862,13 +868,14 @@ export class SqliteStorageService implements IStorageService {
 
     exportData(): ExportedData {
         return {
-            version: '1.0.0',
+            version: '2.0.0',
             exportedAt: Date.now(),
             platform: 'desktop',
             data: {
                 settings: this.fetchSettings(),
                 userProfile: this.fetchUserProfile(),
                 lists: this.fetchLists(),
+                goals: this.fetchGoals(),
                 tasks: this.fetchTasks(),
                 summaries: this.fetchSummaries(),
                 echoReports: this.fetchEchoReports()
@@ -912,6 +919,7 @@ export class SqliteStorageService implements IStorageService {
                 if (localReport) conflicts.push({ id: importedReport.id, type: 'echo', local: localReport, imported: importedReport });
             });
         }
+        conflicts.push(...goalImportConflicts(this.fetchGoals(), data, options));
         return conflicts;
     }
 
@@ -919,6 +927,7 @@ export class SqliteStorageService implements IStorageService {
         const result: ImportResult = { success: false, message: '', imported: { settings: 0, lists: 0, tasks: 0, summaries: 0, echo: 0 }, conflicts: [], errors: [] };
         try {
             if (!data || !data.data) throw new Error('Invalid import data format');
+            const originalGoals = [...this.fetchGoals()];
 
             if (options.includeSettings && data.data.settings) {
                 if (data.data.settings.appearance) { this.updateAppearanceSettings(data.data.settings.appearance); result.imported.settings++; }
@@ -943,7 +952,7 @@ export class SqliteStorageService implements IStorageService {
                     if (existingList) {
                         const resolution = conflictResolutions?.get(importedList.id) || options.conflictResolution;
                         if (resolution === 'keep-local') shouldImport = false;
-                        else if (resolution === 'keep-newer') shouldImport = existingList.name !== importedList.name;
+                        else if (resolution === 'keep-newer') shouldImport = (importedList.updatedAt ?? 0) > (existingList.updatedAt ?? 0);
                         else if (resolution === 'skip') shouldImport = false;
                     }
                     if (shouldImport) {
@@ -954,6 +963,8 @@ export class SqliteStorageService implements IStorageService {
                 });
                 this.updateLists(lists);
             }
+
+            this.updateGoals(mergeImportedGoals(originalGoals, data, options, this.fetchLists(), conflictResolutions));
 
             if (options.includeTasks && data.data.tasks) {
                 const tasks = options.replaceAllData ? [] : this.fetchTasks();
@@ -1029,6 +1040,7 @@ export class SqliteStorageService implements IStorageService {
                 });
             }
 
+            this.updateTasks(this.fetchTasks().map(task => normalizeTaskProject(task, this.fetchLists(), this.fetchGoals())));
             result.success = true;
             result.message = 'Data imported successfully';
         } catch (error) {
@@ -1040,7 +1052,7 @@ export class SqliteStorageService implements IStorageService {
     }
 
     private mapDbListToList(dbList: DbList): List {
-        return { id: dbList.id, name: dbList.name, icon: dbList.icon, color: dbList.color, order: dbList.order };
+        return normalizeProject({ ...(dbList.project_metadata ? JSON.parse(dbList.project_metadata) : {}), id: dbList.id, name: dbList.name, icon: dbList.icon, color: dbList.color, order: dbList.order, createdAt: dbList.created_at, updatedAt: dbList.updated_at });
     }
 
     private mapDbTaskToTask(dbTask: DbTask): Task {
@@ -1062,6 +1074,7 @@ export class SqliteStorageService implements IStorageService {
             }
         }
         return {
+            goalId: dbTask.goal_id, urgent: Boolean(dbTask.urgent), startDate: dbTask.start_date,
             id: dbTask.id, title: dbTask.title, completed: Boolean(dbTask.completed), completedAt: dbTask.completed_at,
             completePercentage: dbTask.complete_percentage, dueDate: dbTask.due_date, listId: dbTask.list_id,
             listName: dbTask.list_name, content: dbTask.content || undefined, order: dbTask.order,

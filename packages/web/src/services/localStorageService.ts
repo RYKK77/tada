@@ -1,8 +1,10 @@
+import { normalizeProject, normalizeGoals, normalizeTaskProject, taskProjectUpdates, mergeImportedGoals, goalImportConflicts, assertProjectCompletion } from '@tada/core/projects';
 import { IStorageService } from '@tada/core/services/storageInterface';
 import {
     AISettings,
     AppearanceSettings,
     List,
+    ProjectGoal,
     PreferencesSettings,
     StoredSummary,
     Task,
@@ -31,6 +33,7 @@ import {
 const KEYS = {
     TASKS: 'tada-tasks',
     LISTS: 'tada-lists',
+    GOALS: 'tada-project-goals',
     SUMMARIES: 'tada-summaries',
     ECHO_REPORTS: 'tada-echo-reports',
     APPEARANCE_SETTINGS: 'tada-appearanceSettings',
@@ -128,7 +131,7 @@ function setItem<T>(key: string, value: T, cache?: MemoryCache<T>): void {
  */
 function persistToStorage<T>(key: string, value: T, cache?: MemoryCache<T>): void {
     try {
-        const stringifiedData = JSON.stringify(value);
+        const stringifiedData = JSON.stringify(cache?.get() ?? value);
         localStorage.setItem(key, stringifiedData);
         if (cache) {
             cache.clearDirty();
@@ -162,6 +165,7 @@ initializeDefaultData();
 export class LocalStorageService implements IStorageService {
     private tasksCache = new MemoryCache<Task[]>();
     private listsCache = new MemoryCache<List[]>();
+    private goalsCache = new MemoryCache<ProjectGoal[]>();
     private summariesCache = new MemoryCache<StoredSummary[]>();
     private echoReportsCache = new MemoryCache<EchoReport[]>();
     private appearanceCache = new MemoryCache<AppearanceSettings>();
@@ -265,7 +269,7 @@ export class LocalStorageService implements IStorageService {
      * Retrieve all lists from cache or localStorage
      */
     fetchLists() {
-        return getItem<List[]>(KEYS.LISTS, [], this.listsCache);
+        return getItem<List[]>(KEYS.LISTS, [], this.listsCache).map(normalizeProject);
     }
 
     /**
@@ -273,11 +277,13 @@ export class LocalStorageService implements IStorageService {
      */
     createList(listData: { name: string; icon?: string }) {
         const lists = this.fetchLists();
+        const now = Date.now();
         const newList: List = {
             id: `list-${Date.now()}-${Math.random()}`,
             name: listData.name,
             icon: listData.icon ?? 'list',
             order: (lists.length + 1) * 1000,
+            status: 'planned', createdAt: now, updatedAt: now,
         };
         lists.push(newList);
         setItem(KEYS.LISTS, lists, this.listsCache);
@@ -295,7 +301,8 @@ export class LocalStorageService implements IStorageService {
         const updatedLists = lists.map(list => {
             if (list.id === listId) {
                 originalName = list.name;
-                updatedList = { ...list, ...updates };
+                updatedList = { ...list, ...updates, updatedAt: Date.now() };
+                if (updates.status === 'completed') assertProjectCompletion(updatedList, this.fetchTasks());
                 return updatedList;
             }
             return list;
@@ -308,7 +315,7 @@ export class LocalStorageService implements IStorageService {
         if (updates.name && originalName && updates.name !== originalName) {
             const tasks = this.fetchTasks();
             const updatedTasks = tasks.map(task =>
-                task.listId === listId ? { ...task, listName: updates.name! } : task
+                task.listId === listId && task.listName !== 'Trash' ? { ...task, listName: updates.name!, updatedAt: Date.now() } : task
             );
             setItem(KEYS.TASKS, updatedTasks, this.tasksCache);
         }
@@ -332,13 +339,14 @@ export class LocalStorageService implements IStorageService {
         const updatedTasks = tasks.map(task => {
             if (task.listId === listId) {
                 return task.listName === 'Trash'
-                    ? { ...task, listId: null }
-                    : { ...task, listId: inbox.id, listName: inbox.name };
+                    ? { ...task, listId: null, goalId: null }
+                    : { ...task, listId: inbox.id, listName: inbox.name, goalId: null };
             }
             return task;
         });
         setItem(KEYS.TASKS, updatedTasks, this.tasksCache);
 
+        this.updateGoals(this.fetchGoals().filter(goal => goal.projectId !== listId));
         const newLists = lists.filter(l => l.id !== listId);
         setItem(KEYS.LISTS, newLists, this.listsCache);
         return { message: "List deleted successfully" };
@@ -348,8 +356,20 @@ export class LocalStorageService implements IStorageService {
      * Replace all lists with new set in cache and localStorage
      */
     updateLists(lists: List[]) {
+        lists = lists.map(normalizeProject);
+        if (!lists.some(list => list.name === 'Inbox')) lists.push({ id: 'inbox-default', name: 'Inbox', icon: 'inbox', order: 0 });
         setItem(KEYS.LISTS, lists, this.listsCache);
         return lists;
+    }
+
+    fetchGoals(): ProjectGoal[] {
+        return getItem<ProjectGoal[]>(KEYS.GOALS, [], this.goalsCache);
+    }
+
+    updateGoals(goals: ProjectGoal[]): ProjectGoal[] {
+        const normalized = normalizeGoals(goals, this.fetchLists());
+        setItem(KEYS.GOALS, normalized, this.goalsCache);
+        return normalized;
     }
 
     /**
@@ -372,6 +392,7 @@ export class LocalStorageService implements IStorageService {
             updatedAt: now,
             groupCategory: 'nodate',
         };
+        Object.assign(newTask, normalizeTaskProject(newTask, this.fetchLists(), this.fetchGoals()));
         tasks.push(newTask);
         setItem(KEYS.TASKS, tasks, this.tasksCache);
         return newTask;
@@ -385,7 +406,7 @@ export class LocalStorageService implements IStorageService {
         let updatedTask: Task | undefined;
         const newTasks = tasks.map(task => {
             if (task.id === taskId) {
-                updatedTask = { ...task, ...updates, updatedAt: Date.now() };
+                updatedTask = { ...task, ...taskProjectUpdates(task, updates, this.fetchLists(), this.fetchGoals()), updatedAt: Date.now() };
                 return updatedTask;
             }
             return task;
@@ -416,6 +437,7 @@ export class LocalStorageService implements IStorageService {
      * Batch update tasks with deferred write for improved performance
      */
     async batchUpdateTasks(tasks: Task[]): Promise<void> {
+        tasks = tasks.map(task => normalizeTaskProject(task, this.fetchLists(), this.fetchGoals()));
         const currentTasks = this.fetchTasks();
         const updatesMap = new Map(tasks.map(t => [t.id, t]));
 
@@ -454,6 +476,7 @@ export class LocalStorageService implements IStorageService {
      * Flush all pending writes to localStorage asynchronously
      */
     async flush(): Promise<void> {
+        this.flushSync();
         if (this.pendingWrites.size === 0) return;
 
         const writes = Array.from(this.pendingWrites);
@@ -496,6 +519,7 @@ export class LocalStorageService implements IStorageService {
         const caches = [
             { key: KEYS.TASKS, cache: this.tasksCache },
             { key: KEYS.LISTS, cache: this.listsCache },
+            { key: KEYS.GOALS, cache: this.goalsCache },
             { key: KEYS.SUMMARIES, cache: this.summariesCache },
             { key: KEYS.ECHO_REPORTS, cache: this.echoReportsCache },
             { key: KEYS.APPEARANCE_SETTINGS, cache: this.appearanceCache },
@@ -687,13 +711,14 @@ export class LocalStorageService implements IStorageService {
         const echoReports = this.fetchEchoReports();
 
         return {
-            version: '1.0.0',
+            version: '2.0.0',
             exportedAt: Date.now(),
             platform: 'web',
             data: {
                 settings,
                 userProfile,
                 lists,
+                goals: this.fetchGoals(),
                 tasks,
                 summaries,
                 echoReports
@@ -782,6 +807,7 @@ export class LocalStorageService implements IStorageService {
             });
         }
 
+        conflicts.push(...goalImportConflicts(this.fetchGoals(), data, options));
         return conflicts;
     }
 
@@ -807,6 +833,8 @@ export class LocalStorageService implements IStorageService {
             if (!data || !data.data) {
                 throw new Error('Invalid import data format');
             }
+
+            const originalGoals = [...this.fetchGoals()];
 
             // Import settings
             if (options.includeSettings && data.data.settings) {
@@ -849,7 +877,7 @@ export class LocalStorageService implements IStorageService {
                         switch (resolution) {
                             case 'keep-local': shouldImport = false; break;
                             case 'keep-imported': listToImport = importedList; break;
-                            case 'keep-newer': shouldImport = existingList.name !== importedList.name; break;
+                            case 'keep-newer': shouldImport = (importedList.updatedAt ?? 0) > (existingList.updatedAt ?? 0); break;
                             case 'skip': shouldImport = false; break;
                         }
                     }
@@ -866,6 +894,8 @@ export class LocalStorageService implements IStorageService {
                 });
                 this.updateLists(lists);
             }
+
+            this.updateGoals(mergeImportedGoals(originalGoals, data, options, this.fetchLists(), conflictResolutions));
 
             // Import tasks
             if (options.includeTasks && data.data.tasks) {
@@ -960,6 +990,7 @@ export class LocalStorageService implements IStorageService {
                 setItem(KEYS.ECHO_REPORTS, reports, this.echoReportsCache);
             }
 
+            this.updateTasks(this.fetchTasks().map(task => normalizeTaskProject(task, this.fetchLists(), this.fetchGoals())));
             result.success = true;
             result.message = 'Data imported successfully';
 

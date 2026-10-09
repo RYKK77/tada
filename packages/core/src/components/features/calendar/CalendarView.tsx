@@ -42,7 +42,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from "react-i18next";
 import { Locale } from "date-fns";
 import Button from "@/components/ui/Button.tsx";
-import { preferencesSettingsAtom, selectedTaskIdAtom, tasksAtom, tasksLoadingAtom } from "@/store/jotai.ts";
+import { preferencesSettingsAtom, selectedTaskIdAtom, activeProjectTasksAtom, tasksLoadingAtom } from "@/store/jotai.ts";
 import Icon from "@/components/ui/Icon.tsx";
 import { useTaskOperations } from '@/hooks/useTaskOperations';
 
@@ -193,7 +193,7 @@ DroppableDayCell.displayName = 'DroppableDayCell';
 const CalendarView: React.FC = () => {
     const { t } = useTranslation();
     const preferences = useAtomValue(preferencesSettingsAtom);
-    const [tasksData] = useAtom(tasksAtom);
+    const [tasksData] = useAtom(activeProjectTasksAtom);
     const tasks = useMemo(() => tasksData ?? [], [tasksData]);
     const isLoadingTasks = useAtomValue(tasksLoadingAtom);
 

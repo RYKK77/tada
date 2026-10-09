@@ -1,3 +1,5 @@
+import { projectGoalsAtom } from '@/store/projects';
+import { isArchivedTask } from '@/services/projects';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TaskItem from './TaskItem';
 import { useAtomValue, useSetAtom } from 'jotai';
@@ -57,6 +59,7 @@ import { twMerge } from 'tailwind-merge';
 import { TaskItemMenuProvider } from '@/context/TaskItemMenuContext';
 import { IconName } from '@/components/ui/IconMap.ts';
 import { analyzeTaskInputWithAI, isAIConfigValid, suggestListForTaskWithAI } from '@/services/aiService';
+import { getTaskDateContext, resolveAiTaskDates } from '@/services/ai/taskDates';
 import { useTranslation } from "react-i18next";
 import CustomDatePickerContent from "@/components/ui/DatePicker.tsx";
 import { AI_PROVIDERS } from "@/config/aiProviders.ts";
@@ -126,17 +129,19 @@ const getAiGlowThemeClass = (priority: number | null): string => {
 /**
  * The main component for displaying and managing a list of tasks.
  */
-const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
+const TaskList: React.FC<{ title: string; projectId?: string; goalIds?: string[]; unlinkedOnly?: boolean; includeCompleted?: boolean; readOnly?: boolean; groupByGoal?: boolean }> = ({ title: pageTitle, projectId, goalIds, unlinkedOnly = false, includeCompleted = false, readOnly = false, groupByGoal = false }) => {
     const { t } = useTranslation();
     const allTasksData = useAtomValue(tasksAtom);
     const allTasks = useMemo(() => allTasksData ?? [], [allTasksData]);
     const isLoadingTasks = useAtomValue(tasksLoadingAtom);
-    const currentFilterGlobal = useAtomValue(currentFilterAtom);
+    const routeFilter = useAtomValue(currentFilterAtom);
     const setSelectedTaskId = useSetAtom(selectedTaskIdAtom);
     const groupedTasks = useAtomValue(groupedAllTasksAtom);
     const rawSearchResults = useAtomValue(rawSearchResultsAtom);
     const searchTerm = useAtomValue(searchTermAtom);
     const allUserLists = useAtomValue(userListsAtom);
+    const projectGoals = useAtomValue(projectGoalsAtom);
+    const currentFilterGlobal = projectId ? `list-${allUserLists?.find(list => list.id === projectId)?.name ?? ''}` as const : routeFilter;
     const preferencesData = useAtomValue(preferencesSettingsAtom);
     const aiSettings = useAtomValue(aiSettingsAtom);
     const userProfile = useAtomValue(userProfileAtom);
@@ -180,7 +185,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
     const [isAiProcessing, setIsAiProcessing] = useState(false);
 
 
-    const availableListsForNewTask = useMemo(() => allUserLists?.map(l => l.name).filter(n => n !== 'Trash') ?? [], [allUserLists]);
+    const availableListsForNewTask = useMemo(() => allUserLists?.filter(l => !l.archivedAt && l.status !== 'completed').map(l => l.name).filter(n => n !== 'Trash') ?? [], [allUserLists]);
 
     const isAIConfigured = useMemo(() => isAIConfigValid(aiSettings), [aiSettings]);
 
@@ -259,13 +264,13 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
     const { tasksToDisplay, isGroupedView, isSearching } = useMemo(() => {
         const searching = searchTerm.trim().length > 0;
         if (searching) {
-            return { tasksToDisplay: rawSearchResults, isGroupedView: false, isSearching: true };
+            return { tasksToDisplay: projectId ? rawSearchResults.filter(task => task.listId === projectId && task.listName !== 'Trash' && (includeCompleted || !task.completed) && (!unlinkedOnly || !task.goalId) && (!goalIds || !!task.goalId && goalIds.includes(task.goalId))) : rawSearchResults, isGroupedView: false, isSearching: true };
         }
         if (currentFilterGlobal === 'all') {
             return { tasksToDisplay: groupedTasks, isGroupedView: true, isSearching: false };
         }
 
-        const activeTasks = allTasks.filter(task => task.listName !== 'Trash');
+        const activeTasks = allTasks.filter(task => task.listName !== 'Trash' && (projectId ? task.listId === projectId : !isArchivedTask(task, allUserLists ?? [])));
         const trashedTasks = allTasks.filter(task => task.listName === 'Trash');
         let filtered: Task[] = [];
 
@@ -285,7 +290,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
             default:
                 if (currentFilterGlobal.startsWith('list-')) {
                     const listName = currentFilterGlobal.substring(5);
-                    filtered = activeTasks.filter(task => !task.completed && task.listName === listName);
+                    filtered = activeTasks.filter(task => (includeCompleted || !task.completed) && (projectId ? task.listId === projectId : task.listName === listName) && (!unlinkedOnly || !task.goalId) && (!goalIds || !!task.goalId && goalIds.includes(task.goalId)));
                 } else if (currentFilterGlobal.startsWith('tag-')) {
                     const tagName = currentFilterGlobal.substring(4);
                     filtered = activeTasks.filter(task => !task.completed && task.tags?.includes(tagName));
@@ -296,7 +301,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
             filtered.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         }
         return { tasksToDisplay: filtered, isGroupedView: false, isSearching: false };
-    }, [searchTerm, currentFilterGlobal, groupedTasks, rawSearchResults, allTasks]);
+    }, [searchTerm, currentFilterGlobal, groupedTasks, rawSearchResults, allTasks, allUserLists, projectId, includeCompleted, goalIds, unlinkedOnly]);
 
     const completedGroups = useMemo(() => {
         if (currentFilterGlobal !== 'completed') return {};
@@ -548,6 +553,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
             completedAt: null,
             listName: initialListName,
             listId: listIdForNewTask,
+            goalId: projectId && listIdForNewTask === projectId ? goalIds?.[0] ?? null : null,
             completePercentage: null,
             startDate: newTaskDueDate ? Date.now() : null,
             dueDate: newTaskDueDate ? newTaskDueDate.getTime() : null,
@@ -569,7 +575,10 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
         }
         setNewTaskDueDate(defaultDate);
         setNewTaskPriority(preferences.defaultNewTaskPriority);
-        if (availableListsForNewTask.includes(preferences.defaultNewTaskList)) {
+        const currentProjectName = allUserLists?.find(list => list.id === projectId)?.name;
+        if (currentProjectName) {
+            setNewTaskListState(currentProjectName);
+        } else if (availableListsForNewTask.includes(preferences.defaultNewTaskList)) {
             setNewTaskListState(preferences.defaultNewTaskList);
         } else if (availableListsForNewTask.length > 0) {
             setNewTaskListState(availableListsForNewTask[0]);
@@ -631,18 +640,18 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
         }
     }, [
         newTaskTitle, newTaskDueDate, newTaskPriority, newTaskListState,
-        createTask, updateTask, allTasks, preferences, availableListsForNewTask, allUserLists,
+        createTask, updateTask, allTasks, preferences, availableListsForNewTask, allUserLists, projectId, goalIds,
         isAIConfigured, aiSettings, currentFilterGlobal, t, setAiListAnalyzingTaskIds
     ]);
 
     const isRegularNewTaskModeAllowed = useMemo(() =>
-        !['completed', 'trash'].includes(currentFilterGlobal) && !isSearching,
-        [currentFilterGlobal, isSearching]
+        !readOnly && !['completed', 'trash'].includes(currentFilterGlobal) && !isSearching,
+        [currentFilterGlobal, isSearching, readOnly]
     );
 
     const shouldShowAiButton = useMemo(() =>
-        !['completed', 'trash'].includes(currentFilterGlobal),
-        [currentFilterGlobal]
+        !readOnly && !['completed', 'trash'].includes(currentFilterGlobal),
+        [currentFilterGlobal, readOnly]
     );
 
     const toggleAiTaskInput = useCallback(() => {
@@ -698,7 +707,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
         setIsAiProcessing(true);
 
         try {
-            const systemPrompt = t('prompts.taskAnalysis', { currentDate: new Date().toLocaleDateString() });
+            const systemPrompt = t('prompts.taskAnalysis', getTaskDateContext());
             const aiAnalysis = await analyzeTaskInputWithAI(sentence, aiSettings, systemPrompt, userProfile);
 
             const initialListName = newTaskListState;
@@ -718,9 +727,9 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
                 completedAt: null,
                 listName: initialListName,
                 listId: listIdForNewTask,
+            goalId: projectId && listIdForNewTask === projectId ? goalIds?.[0] ?? null : null,
                 completePercentage: null,
-                startDate: (aiAnalysis.dueDate || newTaskDueDate) ? Date.now() : null,
-                dueDate: aiAnalysis.dueDate ? new Date(aiAnalysis.dueDate).getTime() : (newTaskDueDate ? newTaskDueDate.getTime() : null),
+                ...resolveAiTaskDates(aiAnalysis, newTaskDueDate),
                 priority: aiAnalysis.priority,
                 order: newOrder,
                 content: aiAnalysis.content,
@@ -813,7 +822,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
         }
     }, [
         newTaskTitle, newTaskDueDate, newTaskListState,
-        createTask, updateTask, createSubtask, allTasks, isAiProcessing, isRegularNewTaskModeAllowed, preferences, allUserLists, t, aiSettings, addNotification, setIsSettingsOpen, setSettingsTab, isAIConfigured,
+        createTask, updateTask, createSubtask, allTasks, projectId, goalIds, isAiProcessing, isRegularNewTaskModeAllowed, preferences, allUserLists, t, aiSettings, addNotification, setIsSettingsOpen, setSettingsTab, isAIConfigured,
         currentFilterGlobal, availableListsForNewTask, setAiListAnalyzingTaskIds, userProfile
     ]);
 
@@ -852,10 +861,21 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
                     task={task}
                     groupCategory={isGroupedView && groupKey !== 'flat-list' ? groupKey as TaskGroupCategory : undefined}
                     scrollContainerRef={scrollContainerRef}
+                    disableSorting={groupByGoal}
                 />
             ))}
         </AnimatePresence>
-    ), [isGroupedView, scrollContainerRef]);
+    ), [isGroupedView, scrollContainerRef, groupByGoal]);
+
+    const goalGroups = useMemo(() => {
+        if (!groupByGoal || !projectId || isGroupedView) return [];
+        const groups = new Map<string, Task[]>();
+        for (const task of tasksToDisplay as Task[]) {
+            const key = task.goalId ?? '';
+            groups.set(key, [...(groups.get(key) ?? []), task]);
+        }
+        return [...groups].map(([id, tasks]) => ({ id, tasks, title: projectGoals?.find(goal => goal.id === id)?.title ?? t('projects.unlinked') }));
+    }, [groupByGoal, projectId, isGroupedView, tasksToDisplay, projectGoals, t]);
 
     const isEmpty = useMemo(() => {
         if (isLoadingTasks) return false;
@@ -1247,7 +1267,7 @@ const TaskList: React.FC<{ title: string }> = ({ title: pageTitle }) => {
                                                     </div>
                                                 ) : (
                                                     <div className="pt-0.5">
-                                                        {renderTaskGroup(tasksToDisplay as Task[], 'flat-list')}
+                                                        {groupByGoal && projectId ? goalGroups.map(group => <section key={group.id} className="mb-5"><h3 className="text-xs font-medium text-grey-medium dark:text-neutral-400 mb-2 break-words">{group.title} · {group.tasks.length}</h3>{renderTaskGroup(group.tasks, 'flat-list')}</section>) : renderTaskGroup(tasksToDisplay as Task[], 'flat-list')}
                                                     </div>
                                                 )}
                                             </>

@@ -4,7 +4,7 @@
  */
 import { atom } from 'jotai';
 import { Task } from '@/types';
-import { tasksAtom, getTaskGroupCategory } from './tasks';
+import { tasksAtom, activeProjectTasksAtom, getTaskGroupCategory } from './tasks';
 import { userListsAtom } from './lists';
 import { searchTermAtom } from './ui';
 
@@ -12,7 +12,7 @@ import { searchTermAtom } from './ui';
  * Derived atom for list names sorted with Inbox first.
  */
 export const userListNamesAtom = atom<string[]>((get) => {
-    const lists = get(userListsAtom) ?? [];
+    const lists = (get(userListsAtom) ?? []).filter(list => !list.archivedAt);
     return lists.map(l => l.name).sort((a, b) => {
         if (a === 'Inbox') return -1;
         if (b === 'Inbox') return 1;
@@ -24,7 +24,7 @@ export const userListNamesAtom = atom<string[]>((get) => {
  * Derived atom for unique tag names from active tasks.
  */
 export const userTagNamesAtom = atom((get) => {
-    const tasks = get(tasksAtom) ?? [];
+    const tasks = get(activeProjectTasksAtom);
     const activeTasks = tasks.filter(task => !task.completed && task.listName !== 'Trash');
     const tags = new Set<string>();
     activeTasks.forEach(task => task.tags?.forEach(tag => tags.add(tag.trim())));
@@ -35,7 +35,7 @@ export const userTagNamesAtom = atom((get) => {
  * Derived atom for task counts by category, list, and tag.
  */
 export const taskCountsAtom = atom((get) => {
-    const tasks = get(tasksAtom) ?? [];
+    const tasks = get(activeProjectTasksAtom);
     const allUserListNames = get(userListNamesAtom);
     const allUserTagNames = get(userTagNamesAtom);
     const activeTasks = tasks.filter(task => task.listName !== 'Trash');

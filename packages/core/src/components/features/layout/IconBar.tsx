@@ -22,6 +22,7 @@ const IconBar: React.FC = memo(() => {
     const navigationItems: { path: string; icon: IconName, labelKey: string }[] = useMemo(() => {
         const items = [
             {path: '/all', icon: 'archive', labelKey: 'iconBar.allTasks'},
+            {path: '/projects', icon: 'folder', labelKey: 'projects.myProjects'},
             {path: '/calendar', icon: 'calendar-days', labelKey: 'iconBar.calendar'},
             {path: '/summary', icon: 'sparkles', labelKey: 'iconBar.aiSummary'},
             {path: '/zen', icon: 'circle', labelKey: 'Zen Mode'},
@@ -46,11 +47,12 @@ const IconBar: React.FC = memo(() => {
     const getNavLinkClass = useCallback((itemPath: string): string => {
         let isSectionActive = false;
         const currentPath = location.pathname;
-        if (itemPath === '/calendar') isSectionActive = currentPath.startsWith('/calendar');
+        if (itemPath === '/projects') isSectionActive = currentPath.startsWith('/projects');
+        else if (itemPath === '/calendar') isSectionActive = currentPath.startsWith('/calendar');
         else if (itemPath === '/summary') isSectionActive = currentPath.startsWith('/summary');
         else if (itemPath === '/zen') isSectionActive = currentPath.startsWith('/zen');
         else if (itemPath === '/echo') isSectionActive = currentPath.startsWith('/echo');
-        else if (itemPath === '/all') isSectionActive = !currentPath.startsWith('/calendar') && !currentPath.startsWith('/summary') && !currentPath.startsWith('/zen') && !currentPath.startsWith('/echo');
+        else if (itemPath === '/all') isSectionActive = !currentPath.startsWith('/projects') && !currentPath.startsWith('/calendar') && !currentPath.startsWith('/summary') && !currentPath.startsWith('/zen') && !currentPath.startsWith('/echo');
 
         return twMerge(
             'flex items-center justify-center w-10 h-10 rounded-base transition-colors duration-200 ease-in-out group relative',

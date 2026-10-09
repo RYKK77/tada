@@ -188,6 +188,7 @@ interface TaskItemProps {
     task: Task;
     groupCategory?: TaskGroupCategory;
     isOverlay?: boolean;
+    disableSorting?: boolean;
     style?: React.CSSProperties;
     scrollContainerRef?: React.RefObject<HTMLDivElement>;
 }
@@ -203,6 +204,7 @@ function areTaskItemPropsEqual(prev: TaskItemProps, next: TaskItemProps): boolea
     // Compare primitive props
     if (prev.groupCategory !== next.groupCategory) return false;
     if (prev.isOverlay !== next.isOverlay) return false;
+    if (prev.disableSorting !== next.disableSorting) return false;
 
     // Compare task object - check key properties
     const prevTask = prev.task;
@@ -252,12 +254,15 @@ const TaskItem: React.FC<TaskItemProps> = memo(({
     task,
     groupCategory,
     isOverlay = false,
+    disableSorting = false,
     style: overlayStyle
 }) => {
     const { t } = useTranslation();
     const [selectedTaskId, setSelectedTaskId] = useAtom(selectedTaskIdAtom);
     const [searchTerm] = useAtom(searchTermAtom);
     const allUserLists = useAtomValue(userListsAtom);
+    const project = allUserLists?.find(list => list.id === task.listId);
+    const isProjectReadOnly = !!project?.archivedAt || project?.status === 'completed';
 
     const preferencesData = useAtomValue(preferencesSettingsAtom);
     const isLoadingPreferences = useAtomValue(preferencesSettingsLoadingAtom);
@@ -284,8 +289,8 @@ const TaskItem: React.FC<TaskItemProps> = memo(({
 
     const isTrashItem = useMemo(() => task.listName === 'Trash', [task.listName]);
     const isCompleted = useMemo(() => task.completed && !isTrashItem, [task.completed, isTrashItem]);
-    const isSortable = useMemo(() => !isCompleted && !isTrashItem && !isOverlay, [isCompleted, isTrashItem, isOverlay]);
-    const isInteractive = useMemo(() => !isOverlay && !isCompleted && !isTrashItem, [isOverlay, isCompleted, isTrashItem]);
+    const isSortable = useMemo(() => !disableSorting && !isProjectReadOnly && !isCompleted && !isTrashItem && !isOverlay, [isCompleted, isTrashItem, isOverlay, isProjectReadOnly, disableSorting]);
+    const isInteractive = useMemo(() => !isProjectReadOnly && !isOverlay && !isCompleted && !isTrashItem, [isOverlay, isCompleted, isTrashItem, isProjectReadOnly]);
 
     const {
         attributes,
@@ -587,7 +592,7 @@ const TaskItem: React.FC<TaskItemProps> = memo(({
     ), [isCompleted, isTrashItem]);
 
     const listIcon: IconName = useMemo(() => task.listName === 'Inbox' ? 'inbox' : (task.listName === 'Trash' ? 'trash' : 'list'), [task.listName]);
-    const availableLists = useMemo(() => (allUserLists ?? []).filter(l => l.name !== 'Trash'), [allUserLists]);
+    const availableLists = useMemo(() => (allUserLists ?? []).filter(l => l.name !== 'Trash' && !l.archivedAt && l.status !== 'completed'), [allUserLists]);
 
     const actionsMenuContentClasses = useMemo(() => twMerge(
         'z-[60] min-w-[180px] p-1 bg-white rounded-base shadow-modal dark:bg-neutral-800 dark:border dark:border-neutral-700',
@@ -676,7 +681,7 @@ const TaskItem: React.FC<TaskItemProps> = memo(({
                 aria-selected={isSelected} aria-labelledby={`task-title-${task.id}`}>
                 <div className={twMerge("flex items-center w-full h-full", isOverlay ? "px-4" : "px-4 pr-3")}>
                     <div className="flex-shrink-0 mr-3">
-                        <ProgressIndicator percentage={task.completePercentage} isTrash={isTrashItem}
+                        <ProgressIndicator percentage={task.completePercentage} isTrash={isTrashItem || isProjectReadOnly}
                             onClick={cycleCompletionPercentage} onKeyDown={handleProgressIndicatorKeyDown}
                             ariaLabelledby={`task-title-${task.id}`} size={16} />
                     </div>

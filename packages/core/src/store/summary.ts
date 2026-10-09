@@ -8,7 +8,7 @@ import {
 } from '@/utils/dateUtils';
 import storageManager from '@/services/storageManager';
 import { LocalDataAtom } from './types';
-import { tasksAtom } from './tasks';
+import { tasksAtom, activeProjectTasksAtom } from './tasks';
 
 // --- Summary Feature Types ---
 export type SummaryPeriodKey = 'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth';
@@ -85,7 +85,7 @@ export const filteredTasksForSummaryAtom = atom<Task[]>((get) => {
 });
 
 export const futureTasksForSummaryAtom = atom<Task[]>((get) => {
-    const allTasks = get(tasksAtom) ?? [];
+    const allTasks = get(activeProjectTasksAtom);
     const period = get(summaryPeriodFilterAtom);
     const listFilter = get(summaryListFilterAtom);
     const { endDate } = getPeriodDates(period);

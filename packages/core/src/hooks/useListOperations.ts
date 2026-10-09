@@ -4,6 +4,7 @@ import { userListsAtom, tasksAtom } from '@/store/jotai';
 import { RESET } from 'jotai/utils';
 import storageManager from '@/services/storageManager';
 import { List } from '@/types';
+import { projectGoalsAtom } from '@/store/projects';
 
 /**
  * A custom hook that provides methods to perform CRUD operations on user lists.
@@ -13,6 +14,7 @@ import { List } from '@/types';
 export const useListOperations = () => {
     const setLists = useSetAtom(userListsAtom);
     const setTasks = useSetAtom(tasksAtom);
+    const setGoals = useSetAtom(projectGoalsAtom);
 
     const createList = useCallback((listData: { name: string }) => {
         const service = storageManager.get();
@@ -58,7 +60,8 @@ export const useListOperations = () => {
         // Deleting a list moves its tasks to Inbox or Trash (logic in service),
         // so we must refresh the tasks atom to reflect these changes in the UI.
         setTasks(RESET);
-    }, [setLists, setTasks]);
+        setGoals(RESET);
+    }, [setLists, setTasks, setGoals]);
 
     return {
         createList,

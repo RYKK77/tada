@@ -158,6 +158,24 @@ pub fn run() {
                 VALUES ('default', 0, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000);
             "#,
             kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "add_project_management",
+            sql: r#"
+                ALTER TABLE lists ADD COLUMN project_metadata TEXT;
+                ALTER TABLE tasks ADD COLUMN goal_id TEXT;
+                ALTER TABLE tasks ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE tasks ADD COLUMN start_date INTEGER;
+                CREATE TABLE project_goals (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    data TEXT NOT NULL
+                );
+                CREATE INDEX idx_project_goals_project ON project_goals(project_id);
+                CREATE INDEX idx_tasks_goal ON tasks(goal_id);
+            "#,
+            kind: MigrationKind::Up,
         }
     ];
 
